@@ -7,6 +7,7 @@ from quantum_examples.shor_lock_picker.quantum_lock import QuantumLockPicker
 
 def main():
     all_shored_up = QuantumLockPicker()
+    # all_shored_up = QuantumLockPicker(backend_type='hardware')
     # all_shored_up.test_class()
     all_shored_up.run_demo()
 

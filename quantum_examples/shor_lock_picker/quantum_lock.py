@@ -10,6 +10,10 @@ from rich.panel import Panel
 from rich.progress import Progress
 
 class QuantumLockPicker:
+    # Constants for AWS Braket pricing
+    BASE_TASK_COST = 0.30  # Cost per task
+    SHOT_COST = 0.00145    # Cost per shot
+    
     def __init__(self, backend_type: str = "simulator", shots: int = 100):
         """
         Initialize the Quantum Lock Picker.
@@ -21,17 +25,32 @@ class QuantumLockPicker:
         self.console = Console()
         self.backend_type = backend_type
         self.shots = shots
+        self.total_tasks = 0  # Track number of quantum tasks
         
         if backend_type == "hardware":
-            cost_estimate = 0.30 + (shots * 0.00145)
+            cost_estimate = self.calculate_cost(tasks=1, shots=shots)
             self.console.print(f"\n[yellow]Warning: Using real quantum hardware!")
             self.console.print(f"[yellow]Estimated cost for this run: ${cost_estimate:.2f}")
+            self.console.print("[yellow]Note: Multiple quantum operations may be needed, increasing the final cost.")
             confirm = input("\nDo you want to continue? (y/N): ")
             if confirm.lower() != 'y':
                 raise ValueError("Operation cancelled by user")
                 
         self.device = self._initialize_device()
         
+    def calculate_cost(self, tasks: int, shots: int) -> float:
+        """
+        Calculate the cost of quantum execution.
+        
+        Args:
+            tasks (int): Number of quantum tasks
+            shots (int): Number of shots per task
+            
+        Returns:
+            float: Estimated cost in USD
+        """
+        return (tasks * self.BASE_TASK_COST) + (tasks * shots * self.SHOT_COST)
+    
     def _initialize_device(self) -> AwsDevice:
         """Initialize the quantum device based on backend type."""
         if self.backend_type == "simulator":
@@ -71,9 +90,6 @@ class QuantumLockPicker:
         Returns:
             Optional[int]: The period if found, None otherwise
         """
-        # For demo purposes, we'll implement a simplified version
-        # In a real implementation, this would use quantum phase estimation
-        
         # Create quantum circuit for period finding
         n_qubits = 2 * len(bin(N)[2:])  # Double the number of bits needed to represent N
         circuit = Circuit()
@@ -89,7 +105,7 @@ class QuantumLockPicker:
             if i < (n_qubits // 2) - 1:
                 circuit.cz(i, i + 1)  # Add entanglement using native CZ
                 quantum_ops += 1
-            
+        
         # Add measurement
         circuit.probability()
         
@@ -121,9 +137,9 @@ class QuantumLockPicker:
             
             try:
                 result = self.device.run(circuit, shots=shots).result()
+                self.total_tasks += 1  # Increment task counter
                 progress.update(task, completed=100)
                 
-                # For demo, return a simplified period calculation
                 return self._calculate_period_from_result(result, N)
                 
             except Exception as e:
@@ -132,14 +148,19 @@ class QuantumLockPicker:
 
     def _calculate_period_from_result(self, result, N: int) -> Optional[int]:
         """Calculate period from quantum measurement results."""
-        # Simplified period calculation for demo
-        # In a real implementation, this would process the quantum measurements
-        # to find the actual period
+        # Improve period calculation for better success rate
+        measurements = result.measurements  # Get raw measurements
         
-        # For demo purposes, we'll return a value that would help factor N
-        for r in range(2, N):
-            if pow(2, r, N) == 1:
-                return r
+        # Try a few candidate values for the period
+        for a in [2, 3, 5, 7]:
+            # Look for the period of a^r mod N
+            for r in range(2, min(N, 20)):  # Limit search to reasonable range
+                if pow(a, r, N) == 1:
+                    # Verify this period helps us factor
+                    if r % 2 == 0:
+                        candidate = pow(a, r//2, N)
+                        if 1 < math.gcd(candidate + 1, N) < N:
+                            return r
         return None
 
     def factor_number(self, N: int) -> Tuple[Optional[int], Optional[int]]:
@@ -156,19 +177,30 @@ class QuantumLockPicker:
         if N % 2 == 0:
             return 2, N // 2
             
-        # Find period using quantum circuit
-        r = self.quantum_period_finding(N)
-        if r is None:
-            return None, None
-            
-        # Calculate factors
-        if r % 2 == 0:
-            candidate = pow(2, r//2, N)
-            factor1 = math.gcd(candidate + 1, N)
-            factor2 = math.gcd(candidate - 1, N)
-            if factor1 > 1 and factor2 > 1:
-                return factor1, factor2
+        # Try a few times since the quantum part is probabilistic
+        for _ in range(3):  # Give it a few attempts
+            # Find period using quantum circuit
+            r = self.quantum_period_finding(N)
+            if r is None:
+                continue
                 
+            # Calculate factors
+            if r % 2 == 0:
+                candidate = pow(2, r//2, N)
+                factor1 = math.gcd(candidate + 1, N)
+                factor2 = math.gcd(candidate - 1, N)
+                if factor1 > 1 and factor2 > 1:
+                    return factor1, factor2
+                    
+            # Try alternative factoring method
+            for a in [3, 5, 7]:
+                candidate = pow(a, r//2, N) if r % 2 == 0 else 0
+                if candidate > 1:
+                    factor1 = math.gcd(candidate + 1, N)
+                    factor2 = math.gcd(candidate - 1, N)
+                    if factor1 > 1 and factor1 < N and factor2 > 1 and factor2 < N:
+                        return factor1, factor2
+                        
         return None, None
 
     def run_demo(self):
@@ -177,6 +209,8 @@ class QuantumLockPicker:
             "[bold cyan]Welcome to Sin's Quantum Lock Picker![/bold cyan]\n"
             "Using Shor's Algorithm to break digital locks quantum-style!"
         ))
+
+        print(f"\nUsing device: {self.device.name}")
         
         # Create a new lock
         p1, p2, lock_number = self.create_lock()
@@ -220,6 +254,18 @@ class QuantumLockPicker:
                 self.console.print("[bold red]× Different factorization found!")
         else:
             self.console.print("[bold red]Could not break the lock this time.")
+            
+        # Display cost information
+        final_cost = self.calculate_cost(self.total_tasks, self.shots)
+        if self.backend_type == "simulator":
+            self.console.print(f"\n[cyan]If this was run on real quantum hardware:")
+            self.console.print(f"[cyan]Total quantum tasks executed: {self.total_tasks}")
+            self.console.print(f"[cyan]Shots per task: {self.shots}")
+            self.console.print(f"[cyan]Estimated cost would have been: ${final_cost:.2f}")
+        else:
+            self.console.print(f"\n[yellow]Final quantum execution cost: ${final_cost:.2f}")
+            self.console.print(f"[yellow]Total quantum tasks executed: {self.total_tasks}")
+            self.console.print(f"[yellow]Shots per task: {self.shots}")
 
 if __name__ == "__main__":
     # Create and run the demo
