@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "quantum-examples"
+version = "0.1.0"
+description = "Public examples of using current quantum computers to solve problems"
+authors = ["Sinjhin (John Gardner) <john@ardea.io>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poe.tasks]
+run = "python -m quantum_examples.main"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+dimod = "^0.12.18"
+dwave-system = "^1.28.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
