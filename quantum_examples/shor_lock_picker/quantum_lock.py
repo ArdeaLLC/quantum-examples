@@ -10,15 +10,26 @@ from rich.panel import Panel
 from rich.progress import Progress
 
 class QuantumLockPicker:
-    def __init__(self, backend_type: str = "simulator"):
+    def __init__(self, backend_type: str = "simulator", shots: int = 100):
         """
         Initialize the Quantum Lock Picker.
         
         Args:
             backend_type (str): Type of quantum backend to use ("simulator" or "hardware")
+            shots (int): Number of shots for quantum circuit execution
         """
         self.console = Console()
         self.backend_type = backend_type
+        self.shots = shots
+        
+        if backend_type == "hardware":
+            cost_estimate = 0.30 + (shots * 0.00145)
+            self.console.print(f"\n[yellow]Warning: Using real quantum hardware!")
+            self.console.print(f"[yellow]Estimated cost for this run: ${cost_estimate:.2f}")
+            confirm = input("\nDo you want to continue? (y/N): ")
+            if confirm.lower() != 'y':
+                raise ValueError("Operation cancelled by user")
+                
         self.device = self._initialize_device()
         
     def _initialize_device(self) -> AwsDevice:
@@ -69,7 +80,7 @@ class QuantumLockPicker:
         # Add quantum operations (simplified for demo)
         for i in range(n_qubits // 2):
             circuit.h(i)  # Apply Hadamard gates to create superposition
-        
+            
         # Add measurement
         circuit.probability()
         
@@ -144,17 +155,25 @@ class QuantumLockPicker:
         p1, p2, lock_number = self.create_lock()
         self.console.print(f"\n[green]Created a new quantum lock with number: {lock_number}")
         
-        # Classical attempt visualization
+        # Classical attempt with realistic delay
         self.console.print("\n[yellow]First, let's try breaking it classically...")
+        classical_start = time.time()
         with Progress() as progress:
             task = progress.add_task("[red]Trying classical factoring...", total=100)
-            for i in range(100):
-                time.sleep(0.05)  # Simulate classical computation time
+            # Simulate exponential time complexity for classical factoring
+            delay_per_step = [0.05 * (1.1 ** i) for i in range(100)]
+            for i, delay in enumerate(delay_per_step):
+                time.sleep(delay)  # Increasing delay to simulate exponential complexity
                 progress.update(task, advance=1)
+        classical_time = time.time() - classical_start
+        self.console.print(f"Classical attempt took: {classical_time:.2f} seconds")
                 
         # Now quantum attempt
         self.console.print("\n[cyan]Now, let's use quantum computing with Shor's Algorithm!")
+        quantum_start = time.time()
         factors = self.factor_number(lock_number)
+        quantum_time = time.time() - quantum_start
+        self.console.print(f"Quantum attempt took: {quantum_time:.2f} seconds")
         
         if factors[0] is not None:
             self.console.print(f"\n[bold green]Success! Lock broken!")
@@ -165,12 +184,8 @@ class QuantumLockPicker:
                 self.console.print("[bold red]× Different factorization found!")
         else:
             self.console.print("[bold red]Could not break the lock this time.")
-    
-    def test_class(self):
-        print("Class Loaded")
 
 if __name__ == "__main__":
     # Create and run the demo
     lock_picker = QuantumLockPicker()
-    lock_picker.test_class()
-    # lock_picker.run_demo()
+    lock_picker.run_demo()
