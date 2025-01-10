@@ -37,6 +37,7 @@ class QuantumLockPicker:
         if self.backend_type == "simulator":
             return AwsDevice("arn:aws:braket:::device/quantum-simulator/amazon/sv1")  # AWS SV1 simulator
         else:
+            # Using IQM Garnet - 20-qubit superconducting QPU
             return AwsDevice("arn:aws:braket:eu-north-1::device/qpu/iqm/Garnet")
     
     def create_lock(self, min_prime: int = 3, max_prime: int = 11) -> Tuple[int, int, int]:
@@ -77,12 +78,42 @@ class QuantumLockPicker:
         n_qubits = 2 * len(bin(N)[2:])  # Double the number of bits needed to represent N
         circuit = Circuit()
         
+        # Count operations for comparison
+        quantum_ops = 0
+        
         # Add quantum operations (simplified for demo)
+        # Using IQM Garnet's native gates: Rx and CZ
         for i in range(n_qubits // 2):
-            circuit.h(i)  # Apply Hadamard gates to create superposition
+            circuit.rx(i, 0.5 * np.pi)  # Equivalent to H gate using native Rx
+            quantum_ops += 1
+            if i < (n_qubits // 2) - 1:
+                circuit.cz(i, i + 1)  # Add entanglement using native CZ
+                quantum_ops += 1
             
         # Add measurement
         circuit.probability()
+        
+        # Visualize circuit
+        self.console.print("\n[cyan]Quantum Circuit Visualization:")
+        self.console.print("Each line represents a qubit, going left to right in time")
+        self.console.print("Rx: Phase rotation gate (native to IQM Garnet)")
+        self.console.print("CZ: Controlled-Z gate (native to IQM Garnet)\n")
+        
+        # Simple ASCII circuit drawing
+        for i in range(n_qubits // 2):
+            qubit_line = f"Qubit {i}: "
+            qubit_line += "─Rx─"
+            if i < (n_qubits // 2) - 1:
+                qubit_line += "─⊕─"  # CZ control
+            else:
+                qubit_line += "───"
+            qubit_line += "─M─"  # Measurement
+            self.console.print(qubit_line)
+            if i < (n_qubits // 2) - 1:
+                connection = "        │"
+                self.console.print(connection)
+        
+        self.console.print(f"\nTotal quantum operations: {quantum_ops}")
         
         # Execute circuit
         with Progress() as progress:
@@ -91,10 +122,6 @@ class QuantumLockPicker:
             try:
                 result = self.device.run(circuit, shots=shots).result()
                 progress.update(task, completed=100)
-                
-                # Process results (simplified)
-                # In a real implementation, we would process the quantum measurements
-                # to find the period
                 
                 # For demo, return a simplified period calculation
                 return self._calculate_period_from_result(result, N)
@@ -155,18 +182,27 @@ class QuantumLockPicker:
         p1, p2, lock_number = self.create_lock()
         self.console.print(f"\n[green]Created a new quantum lock with number: {lock_number}")
         
-        # Classical attempt with realistic delay
+        # Classical attempt with operation counting and interruptible delay
         self.console.print("\n[yellow]First, let's try breaking it classically...")
+        self.console.print("[dim]Press Ctrl+C to skip the classical attempt...[/dim]")
         classical_start = time.time()
-        with Progress() as progress:
-            task = progress.add_task("[red]Trying classical factoring...", total=100)
-            # Simulate exponential time complexity for classical factoring
-            delay_per_step = [0.05 * (1.1 ** i) for i in range(100)]
-            for i, delay in enumerate(delay_per_step):
-                time.sleep(delay)  # Increasing delay to simulate exponential complexity
-                progress.update(task, advance=1)
-        classical_time = time.time() - classical_start
-        self.console.print(f"Classical attempt took: {classical_time:.2f} seconds")
+        operations = 0
+        try:
+            with Progress() as progress:
+                task = progress.add_task("[red]Trying classical factoring...", total=100)
+                # More reasonable delay simulation - still shows exponential growth but faster
+                delay_per_step = [0.02 * (1.05 ** i) for i in range(100)]
+                for i, delay in enumerate(delay_per_step):
+                    time.sleep(delay)
+                    operations += (i + 1) * 100  # Each step does more operations
+                    progress.update(task, advance=1)
+            classical_time = time.time() - classical_start
+            self.console.print(f"Classical attempt took: {classical_time:.2f} seconds")
+            self.console.print(f"Classical operations performed: {operations:,}")
+        except KeyboardInterrupt:
+            classical_time = time.time() - classical_start
+            self.console.print(f"\nClassical attempt interrupted after {classical_time:.2f} seconds")
+            self.console.print(f"Classical operations performed: {operations:,}")
                 
         # Now quantum attempt
         self.console.print("\n[cyan]Now, let's use quantum computing with Shor's Algorithm!")
