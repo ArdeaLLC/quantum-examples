@@ -133,19 +133,13 @@ The entire demo illustrates core quantum computing concepts:
 - The potential of quantum computing for cryptography and factoring
 - Hardware-specific optimizations (using IQM Garnet's native gates)
 
-#### ELI5: How Shor's Algorithm Works
-Imagine you're on a circular track, and you're trying to figure out how big the track is. Instead of measuring the 
-whole track (which would take forever), you can just start walking and count how many steps it takes to get back 
-to where you started. This is like finding the "period" - a special pattern that repeats.
-
-Shor's algorithm does something similar with numbers. Instead of trying every possible factor (like the classical 
-computer), it looks for repeating patterns. It's like if you had a really long jump rope and wanted to know how 
-long it is - instead of measuring the whole thing, you could just count how many times it goes around when you 
-roll it up. This special way of finding patterns is what makes quantum computers so much faster at breaking certain 
-kinds of locks!
-
+#### Conclusion
 This demonstration also shows why quantum computing poses future challenges for current encryption methods 
 while making the concepts accessible through an interactive "lock picking" metaphor.
+
+Also though, how amazing the speedup will be of certain problems that can be represented in a way
+where these types of quantum algorithms will make short work of something that would have taken
+years or simply been infeasible with current compute power.
 
 Grover's algorithm can quadratically reduce a search space. 2^256 becomes 2^128 
 (but requires at least 256 error-corected logical quibits)
