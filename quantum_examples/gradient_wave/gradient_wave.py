@@ -32,7 +32,7 @@ class GradientWave:
     
     def create_loss_landscape(self, complexity: str = "simple") -> callable:
         """
-        Create a toy loss landscape function for optimization.
+        Create computationally intensive loss landscapes.
         
         Args:
             complexity (str): Complexity of the loss landscape ("simple", "medium", "complex")
@@ -41,21 +41,76 @@ class GradientWave:
             callable: Loss function that takes parameters and returns loss value
         """
         if complexity == "simple":
-            # Simple quadratic bowl
-            return lambda params: np.sum(params ** 2)
+            def simple_loss(params):
+                # O(n²) complexity with matrix operations
+                param_matrix = np.outer(params, params)
+                result = np.sum(param_matrix ** 2)
+                
+                # Add periodic barriers to create local minima
+                for i in range(len(params)):
+                    result += np.sin(2 * np.pi * params[i]) * np.cos(3 * np.pi * params[i])
+                    
+                # Add cross-terms for all pairs
+                for i in range(len(params)):
+                    for j in range(i + 1, len(params)):
+                        result += 0.1 * np.sin(params[i] + params[j])
+                
+                return float(result)
+            return simple_loss
+            
         elif complexity == "medium":
-            # Multiple local minima
-            return lambda params: np.sum(params ** 2) + 0.5 * np.sin(4 * np.pi * params[0])
+            def medium_loss(params):
+                # O(n³) complexity with tensor operations
+                param_tensor = np.einsum('i,j,k->ijk', params, params, params)
+                result = np.sum(param_tensor ** 2)
+                
+                # Multiple frequency components for each parameter
+                for i in range(len(params)):
+                    for freq in range(1, 6):
+                        result += np.sin(freq * params[i]) * np.cos((freq + 1) * params[i])
+                
+                # Triple parameter interactions
+                for i in range(len(params)):
+                    for j in range(i + 1, len(params)):
+                        for k in range(j + 1, len(params)):
+                            result += params[i] * params[j] * params[k]
+                            result += np.sin(params[i] + params[j] + params[k])
+                
+                return float(result)
+            return medium_loss
+            
         else:
-            # Complex landscape with multiple local minima and barriers
-            return lambda params: (np.sum(params ** 2) + 
-                0.5 * np.sin(4 * np.pi * params[0]) + 
-                0.3 * np.cos(3 * np.pi * params[1])
-            )
+            def complex_loss(params):
+                # O(n⁴) complexity with hypercube operations
+                n = len(params)
+                result = 0.0
+                
+                # Fourth-order interactions
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        for k in range(j + 1, n):
+                            for l in range(k + 1, n):
+                                term = params[i] * params[j] * params[k] * params[l]
+                                result += term ** 2
+                                result += np.sin(term)
+                
+                # Multiple frequency components with cross-terms
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        for freq in range(1, 8):
+                            result += np.sin(freq * params[i] + freq * params[j])
+                            result += np.cos((freq + 1) * params[i] - freq * params[j])
+                
+                return float(result)
+            return complex_loss
     
-    def calculate_gradient(self, loss_fn: callable, params: np.ndarray, epsilon: float = 1e-7) -> np.ndarray:
+    def calculate_gradient(
+        self, loss_fn: callable,
+        params: np.ndarray,
+        epsilon: float = 1e-7
+    ) -> np.ndarray:
         """
-        Calculate numerical gradient of the loss function.
+        Calculate numerical gradient of the loss function with scaling.
         
         Args:
             loss_fn (callable): Loss function
@@ -65,18 +120,24 @@ class GradientWave:
         Returns:
             np.ndarray: Gradient vector
         """
-        gradient = np.zeros_like(params)
+        gradient = np.zeros_like(params, dtype=np.float64)
         for i in range(len(params)):
             params_plus = params.copy()
             params_plus[i] += epsilon
             params_minus = params.copy()
             params_minus[i] -= epsilon
-            gradient[i] = (loss_fn(params_plus) - loss_fn(params_minus)) / (2 * epsilon)
+            
+            # Calculate gradient with scaling to avoid overflow
+            loss_diff = loss_fn(params_plus) - loss_fn(params_minus)
+            gradient[i] = (loss_diff / (2 * epsilon))
+            
+            # Apply scaling to keep values in reasonable range
+            gradient[i] = np.clip(gradient[i], -1e3, 1e3)
+            
         return gradient
     
     def construct_qubo(
-        self,
-        gradient: np.ndarray,
+        self, gradient: np.ndarray,
         current_params: np.ndarray,
         learning_rate: float = 0.1
     ) -> dict:
@@ -121,7 +182,13 @@ class GradientWave:
         Returns:
             np.ndarray: Optimized parameters
         """
-        return np.array([sample[f'p{i}'] for i in range(num_params)])
+        # Handle both dictionary and dimod.SampleView formats
+        if hasattr(sample, 'get'):
+            return np.array([sample.get(f'p{i}', 0.0) for i in range(num_params)])
+        else:
+            # For dimod.SampleView, convert to dict first
+            sample_dict = dict(sample)
+            return np.array([sample_dict.get(f'p{i}', 0.0) for i in range(num_params)])
     
     def optimize(
         self,
@@ -141,9 +208,10 @@ class GradientWave:
             Tuple[List[np.ndarray], List[float]]: Parameter history and loss history
         """
         loss_fn = self.create_loss_landscape(complexity)
-        params = np.random.randn(num_params)  # Random starting point
+        # Initialize with small random values
+        params = np.random.randn(num_params).astype(np.float64) * 0.1
         param_history = [params.copy()]
-        loss_history = [loss_fn(params)]
+        loss_history = [float(loss_fn(params))]
         
         with Progress() as progress:
             task = progress.add_task("[cyan]Optimizing with quantum annealing...", total=max_steps)
@@ -159,19 +227,25 @@ class GradientWave:
                 response = self.sampler.sample_qubo(qubo, num_reads=100)
                 
                 # Get best solution
-                best_sample = next(response.data(['sample', 'energy']).itertuples())
-                new_params = self.decode_solution(best_sample.sample, num_params)
+                best_sample = next(response.samples())
+                new_params = self.decode_solution(best_sample, num_params)
                 
                 # Update parameters
                 params = new_params
                 param_history.append(params.copy())
-                loss_history.append(loss_fn(params))
+                current_loss = float(loss_fn(params))
+                loss_history.append(current_loss)
                 
+                # Update progress
                 progress.update(task, advance=1)
                 
                 # Early stopping if converged
                 if step > 0 and abs(loss_history[-1] - loss_history[-2]) < 1e-6:
+                    progress.update(task, completed=max_steps)
                     break
+                    
+            # Ensure progress shows complete
+            progress.update(task, completed=max_steps)
         
         return param_history, loss_history
     
@@ -182,31 +256,75 @@ class GradientWave:
             "Using D-Wave quantum annealing to optimize neural network parameters"
         ))
         
-        # Run optimization with different complexities
+        # Configuration for different complexity levels
+        configs = {
+            "simple": {"params": 20, "restarts": 2, "iterations": 40},
+            "medium": {"params": 20, "restarts": 3, "iterations": 40},
+            "complex": {"params": 20, "restarts": 4, "iterations": 40}
+        }
+        
         for complexity in ["simple", "medium", "complex"]:
             self.console.print(f"\n[cyan]Testing {complexity} loss landscape:")
+            config = configs[complexity]
             
-            # Classical gradient descent
+            # Classical gradient descent with multiple starting points
             classical_start = time.time()
-            params = np.random.randn(2)
-            loss_fn = self.create_loss_landscape(complexity)
-            for _ in range(10):
-                gradient = self.calculate_gradient(loss_fn, params)
-                params = params - 0.1 * gradient
+            best_classical_loss = float('inf')
+            
+            with Progress() as progress:
+                task = progress.add_task("[red]Running classical optimization...", total=config["restarts"])
+                
+                for _ in range(config["restarts"]):
+                    params = np.random.randn(config["params"]).astype(np.float64) * 0.1
+                    current_params = params.copy()
+                    loss_fn = self.create_loss_landscape(complexity)
+                    
+                    for _ in range(config["iterations"]):
+                        gradient = self.calculate_gradient(loss_fn, current_params)
+                        current_params = current_params - 0.1 * gradient
+                        current_loss = loss_fn(current_params)
+                        best_classical_loss = min(best_classical_loss, current_loss)
+                    
+                    progress.update(task, advance=1)
+            
             classical_time = time.time() - classical_start
             
-            # Quantum-assisted optimization
-            quantum_start = time.time()
-            param_history, loss_history = self.optimize(complexity=complexity)
-            quantum_time = time.time() - quantum_start
+            # Quantum-assisted optimization with timing breakdown
+            qubo_start = time.time()
+            loss_fn = self.create_loss_landscape(complexity)
+            initial_params = np.random.randn(config["params"]).astype(np.float64) * 0.1
+            gradient = self.calculate_gradient(loss_fn, initial_params)
+            qubo = self.construct_qubo(gradient, initial_params)
+            qubo_time = time.time() - qubo_start
             
-            # Print results
+            annealing_start = time.time()
+            response = self.sampler.sample_qubo(qubo, num_reads=100)
+            annealing_time = time.time() - annealing_start
+            
+            optimization_start = time.time()
+            param_history, loss_history = self.optimize(
+                num_params=config["params"],
+                max_steps=config["iterations"],
+                complexity=complexity
+            )
+            optimization_time = time.time() - optimization_start
+            
+            quantum_loss = loss_history[-1]
+            
+            # Print detailed results
+            self.console.print(f"\nProblem size: {config['params']} parameters")
             self.console.print(f"Classical optimization time: {classical_time:.3f}s")
-            self.console.print(f"Quantum optimization time: {quantum_time:.3f}s")
-            self.console.print(f"Final loss: {loss_history[-1]:.6f}")
+            self.console.print(f"Best classical loss: {best_classical_loss:.6f}")
+            self.console.print("\nQuantum timing breakdown:")
+            self.console.print(f"  QUBO construction: {qubo_time:.3f}s")
+            self.console.print(f"  Annealing time: {annealing_time:.3f}s")
+            self.console.print(f"  Total optimization time: {optimization_time:.3f}s")
+            self.console.print(f"Best quantum loss: {quantum_loss:.6f}")
             
-            if complexity == "complex":
-                self.console.print("\n[green]Notice how quantum annealing helps avoid local minima!")
+            if quantum_loss < best_classical_loss:
+                diff_percent = ((best_classical_loss - quantum_loss) / abs(best_classical_loss)) * 100
+                self.console.print(f"\n[green]Quantum annealing found a {diff_percent:.1f}% better minimum!")
+                self.console.print("[green]This demonstrates how quantum annealing can help avoid local minima in complex landscapes.")
 
 if __name__ == "__main__":
     optimizer = GradientWave()
