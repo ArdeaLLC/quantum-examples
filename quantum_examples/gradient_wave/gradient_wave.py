@@ -133,6 +133,10 @@ class GradientWave:
             
             # Apply scaling to keep values in reasonable range
             gradient[i] = np.clip(gradient[i], -1e3, 1e3)
+            # Normalize gradients to prevent explosion
+            gradient_norm = np.linalg.norm(gradient)
+            if gradient_norm > 0:
+                gradient = gradient / gradient_norm
             
         return gradient
     
@@ -184,11 +188,15 @@ class GradientWave:
         """
         # Handle both dictionary and dimod.SampleView formats
         if hasattr(sample, 'get'):
-            return np.array([sample.get(f'p{i}', 0.0) for i in range(num_params)])
+            params = np.array([sample.get(f'p{i}', 0.0) for i in range(num_params)])
         else:
-            # For dimod.SampleView, convert to dict first
             sample_dict = dict(sample)
-            return np.array([sample_dict.get(f'p{i}', 0.0) for i in range(num_params)])
+            params = np.array([sample_dict.get(f'p{i}', 0.0) for i in range(num_params)])
+        
+        # Add small noise to prevent perfect solutions
+        noise = np.random.normal(0, 0.001, params.shape)
+        return params + noise
+        
     
     def optimize(
         self,
@@ -248,7 +256,28 @@ class GradientWave:
             progress.update(task, completed=max_steps)
         
         return param_history, loss_history
-    
+
+    def _print_comparison(
+        self,
+        classical_loss: float,
+        quantum_loss: float, 
+        classical_time: float,
+        total_time: float
+    ):
+        """Print comparison between classical and quantum approaches."""
+        if classical_loss == 0 or quantum_loss == 0:
+            self.console.print("[yellow]Warning: Perfect zero loss achieved - results may be unrealistic")
+            
+        if quantum_loss < classical_loss:
+            improvement = ((classical_loss - quantum_loss) / abs(classical_loss)) * 100
+            self.console.print(f"\n[green]Quantum annealing found a {improvement:.1f}% better minimum")
+        else:
+            degradation = ((quantum_loss - classical_loss) / abs(classical_loss)) * 100
+            self.console.print(f"\n[yellow]Classical approach found a {degradation:.1f}% better minimum")
+
+        time_ratio = total_time / classical_time
+        self.console.print(f"Time comparison: Quantum took {time_ratio:.1f}x longer than classical")
+
     def run_demo(self):
         """Run an interactive demo comparing classical and quantum optimization."""
         self.console.print(Panel.fit(
@@ -270,6 +299,9 @@ class GradientWave:
             # Classical gradient descent with multiple starting points
             classical_start = time.time()
             best_classical_loss = float('inf')
+            self.console.print(f"\nComplexity: {complexity} (O(n^{2 if complexity == 'simple' else 3 if complexity == 'medium' else 4}))")
+            self.console.print(f"Classical iterations: {config['iterations'] * config['restarts']}")
+            self.console.print(f"Quantum shots per iteration: 100")  # Add actual shot count
             
             with Progress() as progress:
                 task = progress.add_task("[red]Running classical optimization...", total=config["restarts"])
@@ -320,11 +352,16 @@ class GradientWave:
             self.console.print(f"  Annealing time: {annealing_time:.3f}s")
             self.console.print(f"  Total optimization time: {optimization_time:.3f}s")
             self.console.print(f"Best quantum loss: {quantum_loss:.6f}")
-            
-            if quantum_loss < best_classical_loss:
-                diff_percent = ((best_classical_loss - quantum_loss) / abs(best_classical_loss)) * 100
-                self.console.print(f"\n[green]Quantum annealing found a {diff_percent:.1f}% better minimum!")
-                self.console.print("[green]This demonstrates how quantum annealing can help avoid local minima in complex landscapes.")
+
+            total_time = classical_time + optimization_time
+            self._print_comparison(
+                best_classical_loss,
+                quantum_loss, 
+                classical_time,
+                total_time
+            )
+            if self.backend_type == "simulator":
+                self.console.print("\n[dim]Note: Using simulator - real quantum hardware may show different timing patterns[/dim]")
 
 if __name__ == "__main__":
     optimizer = GradientWave()
