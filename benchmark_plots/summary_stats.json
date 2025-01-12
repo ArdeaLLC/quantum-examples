@@ -1,0 +1,13 @@
+{
+  "max_speedup": 0.29702013529837584,
+  "qubit_efficiency": {
+    "qubits_per_param": [
+      6.84
+    ]
+  },
+  "loss_comparison": {
+    "quantum_vs_classical": [
+      1.285249911902704
+    ]
+  }
+}

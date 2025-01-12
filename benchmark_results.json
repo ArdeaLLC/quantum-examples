@@ -1,0 +1,17 @@
+[
+  {
+    "paramSize": 50,
+    "classicalTime": 164.11762475967407,
+    "classicalLoss": 6654.177419043243,
+    "classicalOps": 1000,
+    "quantumTime": 552.5471348762512,
+    "quantumLoss": 8552.280941610292,
+    "physicalQubits": 342,
+    "embeddingTime": 20.641786813735962,
+    "estimatedQPUTime": 220000,
+    "estimatedCost": 1.4511,
+    "hybridTime": 215.51120781898499,
+    "hybridLoss": 8546.04472037796,
+    "hybridQuantumPortion": 0.2465521031711406
+  }
+]
