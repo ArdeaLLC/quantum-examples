@@ -1,7 +1,8 @@
 from typing import List, Tuple, Optional
+import minorminer
 import numpy as np
 import dimod
-from dwave.system import DWaveSampler, EmbeddingComposite
+from dwave.system import DWaveSampler, EmbeddingComposite, LeapHybridSampler
 import time
 from rich.console import Console
 from rich.panel import Panel
@@ -13,20 +14,25 @@ class GradientWave:
     by mapping gradient descent to a QUBO problem.
     """
     
-    def __init__(self, backend_type: str = "simulator"):
+    def __init__(self, backend_type: str = "simulator", shots: int = 100):
         """
         Initialize the Gradient Wave optimizer.
         
         Args:
-            backend_type (str): Type of quantum backend to use ("simulator" or "hardware")
+            backend_type (str): Type of quantum backend to use ("simulator", "hardware", or "hybrid")
+            shots (int): Number of shots for quantum circuit execution
         """
         self.console = Console()
         self.backend_type = backend_type
+        self.shots = shots
         
         # Initialize D-Wave sampler
         if backend_type == "hardware":
             self.sampler = EmbeddingComposite(DWaveSampler())
             self.console.print("[yellow]Warning: Using real D-Wave quantum hardware!")
+        elif backend_type == "hybrid":
+            self.sampler = LeapHybridSampler()
+            self.console.print("[yellow]Using D-Wave hybrid solver")
         else:
             self.sampler = dimod.SimulatedAnnealingSampler()
     
@@ -173,7 +179,41 @@ class GradientWave:
             for j in range(i+1, num_params):
                 qubo[(f'p{i}', f'p{j}')] = 2.0
         
+        self.qubo = qubo
         return qubo
+    
+    def check_embedding(self) -> bool:
+        """
+        Check if problem can be embedded on the hardware.
+        
+        Args:
+            qubo: QUBO dictionary
+            
+        Returns:
+            bool: True if embedding is possible
+        """
+        # if self.backend_type == "simulator" or self.backend_type == "hybrid":
+        #     return True
+            
+        try:
+            # Get the hardware graph
+            dw_sampler = DWaveSampler()
+            target_graph = dw_sampler.edgelist
+            
+            # Try to find embedding
+            embedding = minorminer.find_embedding(self.qubo.keys(), target_graph)
+            
+            if embedding:
+                num_physical_qubits = sum(len(chain) for chain in embedding.values())
+                self.console.print(f"[green]Found valid embedding using {num_physical_qubits} physical qubits")
+                return True
+            else:
+                self.console.print("[red]No valid embedding found")
+                return False
+                
+        except Exception as e:
+            self.console.print(f"[red]Error checking embedding: {str(e)}")
+            return False
     
     def decode_solution(self, sample: dict, num_params: int) -> np.ndarray:
         """
@@ -265,21 +305,49 @@ class GradientWave:
         total_time: float
     ):
         """Print comparison between classical and quantum approaches."""
+        abs_diff = abs(abs(quantum_loss) - abs(classical_loss))
+        abs_base = abs(classical_loss)
+        percentage = (abs_diff / abs_base) * 100
+
         if classical_loss == 0 or quantum_loss == 0:
             self.console.print("[yellow]Warning: Perfect zero loss achieved - results may be unrealistic")
             
-        if quantum_loss < classical_loss:
-            improvement = ((classical_loss - quantum_loss) / abs(classical_loss)) * 100
-            self.console.print(f"\n[green]Quantum annealing found a {improvement:.1f}% better minimum")
+        if abs(quantum_loss) < abs(classical_loss):
+            self.console.print(f"\n[green]Quantum annealing found a {percentage:.1f}% better minimum")
         else:
-            degradation = ((quantum_loss - classical_loss) / abs(classical_loss)) * 100
-            self.console.print(f"\n[yellow]Classical approach found a {degradation:.1f}% better minimum")
+            self.console.print(f"\n[yellow]Classical approach found a {percentage:.1f}% better minimum")
 
         time_ratio = total_time / classical_time
         self.console.print(f"Time comparison: Quantum took {time_ratio:.1f}x longer than classical")
 
-    def run_demo(self):
+    def estimate_hardware_time(self, num_problems: int, shots_per_problem: int = 100):
+        """
+        Estimate D-Wave hardware time required.
+        
+        Args:
+            num_problems: Number of QUBO problems to solve
+            shots_per_problem: Number of annealing shots per problem
+        """
+        # D-Wave constants (from documentation)
+        ANNEALING_TIME_US = 20  # microseconds
+        READOUT_TIME_US = 100   # microseconds per shot
+        PROGRAMMING_TIME_US = 10000  # microseconds per problem
+        
+        total_time_us = num_problems * (
+            PROGRAMMING_TIME_US +
+            shots_per_problem * (ANNEALING_TIME_US + READOUT_TIME_US)
+        )
+        
+        total_time_s = total_time_us / 1e6
+        self.console.print(f"\n[cyan]Hardware time estimate:")
+        self.console.print(f"Total problems: {num_problems}")
+        self.console.print(f"Shots per problem: {shots_per_problem}")
+        self.console.print(f"Estimated QPU time: {total_time_s:.2f} seconds")
+        self.console.print(f"With typical queue times this could take {total_time_s * 10:.0f}-{total_time_s * 30:.0f} seconds")
+
+    def run_demo(self, dry_run: bool = False):
         """Run an interactive demo comparing classical and quantum optimization."""
+        dry_run_compute = 0
         self.console.print(Panel.fit(
             "[bold cyan]Welcome to Gradient Wave![/bold cyan]\n"
             "Using D-Wave quantum annealing to optimize neural network parameters"
@@ -301,7 +369,7 @@ class GradientWave:
             best_classical_loss = float('inf')
             self.console.print(f"\nComplexity: {complexity} (O(n^{2 if complexity == 'simple' else 3 if complexity == 'medium' else 4}))")
             self.console.print(f"Classical iterations: {config['iterations'] * config['restarts']}")
-            self.console.print(f"Quantum shots per iteration: 100")  # Add actual shot count
+            self.console.print(f"Quantum shots per iteration: {self.shots}")  # Add actual shot count
             
             with Progress() as progress:
                 task = progress.add_task("[red]Running classical optimization...", total=config["restarts"])
@@ -330,38 +398,48 @@ class GradientWave:
             qubo_time = time.time() - qubo_start
             
             annealing_start = time.time()
-            response = self.sampler.sample_qubo(qubo, num_reads=100)
+            if dry_run:
+                dry_run_compute += 1
+                self.check_embedding()
+            else:
+                response = self.sampler.sample_qubo(qubo, num_reads=100)
             annealing_time = time.time() - annealing_start
             
             optimization_start = time.time()
-            param_history, loss_history = self.optimize(
-                num_params=config["params"],
-                max_steps=config["iterations"],
-                complexity=complexity
-            )
+            if not dry_run:
+                param_history, loss_history = self.optimize(
+                    num_params=config["params"],
+                    max_steps=config["iterations"],
+                    complexity=complexity
+                )
             optimization_time = time.time() - optimization_start
             
-            quantum_loss = loss_history[-1]
-            
-            # Print detailed results
-            self.console.print(f"\nProblem size: {config['params']} parameters")
-            self.console.print(f"Classical optimization time: {classical_time:.3f}s")
-            self.console.print(f"Best classical loss: {best_classical_loss:.6f}")
-            self.console.print("\nQuantum timing breakdown:")
-            self.console.print(f"  QUBO construction: {qubo_time:.3f}s")
-            self.console.print(f"  Annealing time: {annealing_time:.3f}s")
-            self.console.print(f"  Total optimization time: {optimization_time:.3f}s")
-            self.console.print(f"Best quantum loss: {quantum_loss:.6f}")
+            if not dry_run:
+                quantum_loss = loss_history[-1]
+                
+                # Print detailed results
+                self.console.print(f"\nProblem size: {config['params']} parameters")
+                self.console.print(f"Classical optimization time: {classical_time:.3f}s")
+                self.console.print(f"Best classical loss: {best_classical_loss:.6f}")
+                self.console.print("\nQuantum timing breakdown:")
+                self.console.print(f"  QUBO construction: {qubo_time:.3f}s")
+                self.console.print(f"  Annealing time: {annealing_time:.3f}s")
+                self.console.print(f"  Total optimization time: {optimization_time:.3f}s")
+                self.console.print(f"Best quantum loss: {quantum_loss:.6f}")
 
-            total_time = classical_time + optimization_time
-            self._print_comparison(
-                best_classical_loss,
-                quantum_loss, 
-                classical_time,
-                total_time
-            )
+                total_time = classical_time + optimization_time
+                self._print_comparison(
+                    best_classical_loss,
+                    quantum_loss, 
+                    classical_time,
+                    total_time
+                )
             if self.backend_type == "simulator":
                 self.console.print("\n[dim]Note: Using simulator - real quantum hardware may show different timing patterns[/dim]")
+        if dry_run:
+            self.console.print(f"\n[cyan]Dry run complete: {dry_run_compute} QUBO problems checked for embedding")
+            self.console.print("[dim]Note: Embedding check is only necessary for real quantum hardware")
+            self.estimate_hardware_time(dry_run_compute, self.shots * dry_run_compute)
 
 if __name__ == "__main__":
     optimizer = GradientWave()
