@@ -8,8 +8,8 @@ def show_dwave_example(for_realz=False):
         dwave_gradient_wave = GradientWave(backend_type='hardware')
     else:
         dwave_gradient_wave = GradientWave()
-    dwave_gradient_wave.run_demo(dry_run=True)
-    # dwave_gradient_wave.run_demo()
+    # dwave_gradient_wave.run_demo(dry_run=True)
+    dwave_gradient_wave.run_demo()
 
 def show_shor_example(for_realz=False):
     if for_realz:
