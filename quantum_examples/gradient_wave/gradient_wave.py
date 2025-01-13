@@ -14,7 +14,7 @@ class GradientWave:
     by mapping gradient descent to a QUBO problem.
     """
     
-    def __init__(self, backend_type: str = "simulator", shots: int = 100, qubits_per_param: int = 8):
+    def __init__(self, backend_type: str = "simulator", shots: int = 100, qubits_per_param: int = 2):
         """
         Initialize the Gradient Wave optimizer.
         
@@ -157,10 +157,10 @@ class GradientWave:
     def construct_qubo(
         self, gradient: np.ndarray,
         current_params: np.ndarray,
-        learning_rate: float = 0.1
+        learning_rate: float = 0.01
     ) -> dict:
         """
-        Construct QUBO matrix for gradient descent step optimization.
+        Construct QUBO matrix for gradient descent step optimization with multi-qubit precision.
         
         Args:
             gradient (np.ndarray): Gradient vector
@@ -173,19 +173,42 @@ class GradientWave:
         num_params = len(gradient)
         qubo = {}
         
-        # Convert gradient descent step to QUBO
+        # Helper function to get qubit weight for position
+        def get_bit_weight(bit_pos):
+            # Convert bit position to weight (-1 to 1 range)
+            return 2.0 ** (-bit_pos - 1)
+        
+        # Convert gradient descent step to QUBO with multi-qubit encoding
         # We want to minimize: ||params - (current_params - lr * gradient)||^2
         for i in range(num_params):
-            # Diagonal terms
-            qubo[(f'p{i}', f'p{i}')] = 1.0
-            
-            # Linear terms
             target = current_params[i] - learning_rate * gradient[i]
-            qubo[(f'p{i}', f'p{i}')] += -2.0 * target
             
-            # Interaction terms
-            for j in range(i+1, num_params):
-                qubo[(f'p{i}', f'p{j}')] = 2.0
+            # Scale target to [0,1] range for binary encoding
+            scaled_target = (target + 1.0) / 2.0
+            
+            # Add terms for each qubit representing this parameter
+            for bit_i in range(self.qubits_per_param):
+                qubit_i = f'p{i}_{bit_i}'  # Name format: p<param_idx>_<bit_idx>
+                weight_i = get_bit_weight(bit_i)
+                
+                # Diagonal terms for this qubit
+                qubo[(qubit_i, qubit_i)] = weight_i * weight_i
+                
+                # Linear terms based on target value
+                qubo[(qubit_i, qubit_i)] += -2.0 * weight_i * scaled_target
+                
+                # Interaction terms between bits of the same parameter
+                for bit_j in range(bit_i + 1, self.qubits_per_param):
+                    qubit_j = f'p{i}_{bit_j}'
+                    weight_j = get_bit_weight(bit_j)
+                    qubo[(qubit_i, qubit_j)] = 2.0 * weight_i * weight_j
+                    
+                # Interaction terms between different parameters
+                for j in range(i + 1, num_params):
+                    for bit_j in range(self.qubits_per_param):
+                        qubit_j = f'p{j}_{bit_j}'
+                        weight_j = get_bit_weight(bit_j)
+                        qubo[(qubit_i, qubit_j)] = 2.0 * weight_i * weight_j
         
         self.qubo = qubo
         return qubo
@@ -225,7 +248,7 @@ class GradientWave:
     
     def decode_solution(self, sample: dict, num_params: int) -> np.ndarray:
         """
-        Decode QUBO solution back to parameter space.
+        Decode multi-qubit QUBO solution back to parameter space.
         
         Args:
             sample (dict): Solution from quantum annealer
@@ -234,16 +257,22 @@ class GradientWave:
         Returns:
             np.ndarray: Optimized parameters
         """
-        # Handle both dictionary and dimod.SampleView formats
-        if hasattr(sample, 'get'):
-            params = np.array([sample.get(f'p{i}', 0.0) for i in range(num_params)])
-        else:
-            sample_dict = dict(sample)
-            params = np.array([sample_dict.get(f'p{i}', 0.0) for i in range(num_params)])
+        params = np.zeros(num_params)
+        sample_dict = dict(sample) if not hasattr(sample, 'get') else sample
+        
+        for i in range(num_params):
+            # Reconstruct parameter value from its bits
+            param_value = 0.0
+            for bit in range(self.qubits_per_param):
+                bit_value = sample_dict.get(f'p{i}_{bit}', 0.0)
+                param_value += bit_value * (2.0 ** (-bit - 1))
+            
+            # Convert from [0,1] back to [-1,1] range
+            params[i] = 2.0 * param_value - 1.0
         
         # Add small noise to prevent perfect solutions
         noise = np.random.normal(0, 0.001, params.shape)
-        return params + noise
+        return params # + noise
         
     
     def optimize(
@@ -325,7 +354,7 @@ class GradientWave:
         else:
             self.console.print(f"\n[yellow]Classical approach found a {percentage:.1f}% better minimum")
 
-        time_ratio = total_time / classical_time
+        time_ratio = total_time / classical_time if classical_time > 0 else 1
         self.console.print(f"Time comparison: Quantum took {time_ratio:.1f}x longer than classical")
 
     def estimate_hardware_time(self, num_problems: int, shots_per_problem: int = 100):
@@ -351,13 +380,14 @@ class GradientWave:
         self.console.print(f"Total problems: {num_problems}")
         self.console.print(f"Shots per problem: {shots_per_problem}")
         self.console.print(f"Estimated QPU time: {total_time_s:.2f} seconds")
-        self.console.print(f"With typical queue times this could take {total_time_s * 10:.0f}-{total_time_s * 30:.0f} seconds")
+        self.console.print(f"With typical queue times this could use {total_time_s * 10:.0f}-{total_time_s * 30:.0f} seconds")
 
     def run_demo(self):
         """Run an interactive demo comparing classical and quantum optimization."""
         dry_run_problems = 0
         self.console.print(Panel.fit(
-            "[bold cyan]Welcome to Gradient Wave![/bold cyan]\n"
+            "[bold cyan]Welcome to Sin's Gradient Wave![/bold cyan]\n"
+            "[lime]HAI! :waves:\n"
             "Using D-Wave quantum annealing to optimize neural network parameters"
         ))
         
@@ -376,28 +406,36 @@ class GradientWave:
             config = configs[complexity]
             
             # Classical gradient descent with multiple starting points
-            classical_start = time.time()
             best_classical_loss = float('inf')
-            self.console.print(f"\nComplexity: {complexity} (O(n^{2 if complexity == 'simple' else 3 if complexity == 'medium' else 4}))")
+            complexity_string = ''
+            if complexity == "simple" or complexity == "simple40":
+                complexity_string = f"\nComplexity: {complexity} (O(n^2))"
+            elif complexity == "medium" or complexity == "medium40":
+                complexity_string = f"\nComplexity: {complexity} (O(n^3))"
+            elif complexity == "complex" or complexity == "complex40":
+                complexity_string = f"\nComplexity: {complexity} (O(n^4))"
+            self.console.print(complexity_string)
             self.console.print(f"Problem size: {config['params']} parameters")
             self.console.print(f"Classical iterations: {config['iterations'] * config['restarts']}")
             self.console.print(f"Quantum shots per iteration: {self.shots}")
-            
-            with Progress() as progress:
-                task = progress.add_task("[red]Running classical optimization...", total=config["restarts"])
-                
-                for _ in range(config["restarts"]):
-                    params = np.random.randn(config["params"]).astype(np.float64) * 0.1
-                    current_params = params.copy()
-                    loss_fn = self.create_loss_landscape(complexity)
+            self.console.print(f"Logical qubits required: {total_logical_qubits} ({self.qubits_per_param} per parameter)")
+            classical_start = time.time()
+            if not self.backend_type == 'simulator_test':
+                with Progress() as progress:
+                    task = progress.add_task("[red]Running classical optimization...", total=config["restarts"])
                     
-                    for _ in range(config["iterations"]):
-                        gradient = self.calculate_gradient(loss_fn, current_params)
-                        current_params = current_params - 0.1 * gradient
-                        current_loss = loss_fn(current_params)
-                        best_classical_loss = min(best_classical_loss, current_loss)
-                    
-                    progress.update(task, advance=1)
+                    for _ in range(config["restarts"]):
+                        params = np.random.randn(config["params"]).astype(np.float64) * 0.1
+                        current_params = params.copy()
+                        loss_fn = self.create_loss_landscape(complexity)
+                        
+                        for _ in range(config["iterations"]):
+                            gradient = self.calculate_gradient(loss_fn, current_params) if not self.dry_run else 0
+                            current_params = current_params - 0.1 * gradient
+                            current_loss = loss_fn(current_params)
+                            best_classical_loss = min(best_classical_loss, current_loss)
+                        
+                        progress.update(task, advance=1)
             
             classical_time = time.time() - classical_start
             
@@ -428,11 +466,13 @@ class GradientWave:
             
             if not self.dry_run:
                 quantum_loss = loss_history[-1]
+                total_logical_qubits = config['params'] * self.qubits_per_param
                 
                 # Print detailed results
                 self.console.print(f"\nProblem size: {config['params']} parameters")
                 self.console.print(f"Classical optimization time: {classical_time:.3f}s")
                 self.console.print(f"Best classical loss: {best_classical_loss:.6f}")
+                self.console.print(f"Logical qubits required: {total_logical_qubits} ({self.qubits_per_param} per parameter)")
                 self.console.print("\nQuantum timing breakdown:")
                 self.console.print(f"  QUBO construction: {qubo_time:.3f}s")
                 self.console.print(f"  Annealing time: {annealing_time:.3f}s")
