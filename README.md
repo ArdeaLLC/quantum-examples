@@ -1,3 +1,5 @@
+# THESE ARE NOT DONE YET OR CHECKED FOR FACTUALITY
+
 # quantum-examples
 Public examples of using current quantum computers to solve toy problems.
 
