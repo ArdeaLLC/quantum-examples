@@ -309,7 +309,7 @@ class GradientWave:
                 qubo = self.construct_qubo(gradient, params)
                 
                 # Run quantum annealing
-                response = self.sampler.sample_qubo(qubo, num_reads=100)
+                response = self.sampler.sample_qubo(qubo) if self.backend_type == 'hybrid' else self.sampler.sample_qubo(qubo, num_reads=100)
                 
                 # Get best solution
                 best_sample = next(response.samples())
@@ -387,9 +387,10 @@ class GradientWave:
         dry_run_problems = 0
         self.console.print(Panel.fit(
             "[bold cyan]Welcome to Sin's Gradient Wave![/bold cyan]\n"
-            "[lime]HAI! :waves:\n"
+            "[bright_green bold]HAI! [bright_green dim]:waves:\n"
             "Using D-Wave quantum annealing to optimize neural network parameters"
         ))
+        self.console.print(f"[orange4]Running mode: [wheat4 bold]{self.backend_type}")
         
         # Configuration for different complexity levels
         configs = {
@@ -407,6 +408,7 @@ class GradientWave:
             
             # Classical gradient descent with multiple starting points
             best_classical_loss = float('inf')
+            total_logical_qubits = config['params'] * self.qubits_per_param
             complexity_string = ''
             if complexity == "simple" or complexity == "simple40":
                 complexity_string = f"\nComplexity: {complexity} (O(n^2))"
@@ -452,7 +454,7 @@ class GradientWave:
                 dry_run_problems += 1
                 self.check_embedding()
             else:
-                response = self.sampler.sample_qubo(qubo, num_reads=100)
+                response = self.sampler.sample_qubo(qubo) if self.backend_type == 'hybrid' else self.sampler.sample_qubo(qubo, num_reads=100)
             annealing_time = time.time() - annealing_start
             
             optimization_start = time.time()
@@ -466,8 +468,6 @@ class GradientWave:
             
             if not self.dry_run:
                 quantum_loss = loss_history[-1]
-                total_logical_qubits = config['params'] * self.qubits_per_param
-                
                 # Print detailed results
                 self.console.print(f"\nProblem size: {config['params']} parameters")
                 self.console.print(f"Classical optimization time: {classical_time:.3f}s")

@@ -3,7 +3,7 @@ from quantum_examples.shor_lock_picker.quantum_lock import QuantumLockPicker
 from quantum_examples.visualization import BenchmarkVisualizer
 
 # 'dry_run', 'simulator', 'simulator_test', 'hybrid', 'hardware'
-RUN_TYPE = 'simulator_test'
+RUN_TYPE = 'hybrid'
 
 def show_dwave_example():
     dwave_gradient_wave = GradientWave(backend_type=RUN_TYPE)
